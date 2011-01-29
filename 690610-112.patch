@@ -1,0 +1,793 @@
+? 690610-100.patch
+? p.patch
+Index: content_access.admin.inc
+===================================================================
+RCS file: /cvs/drupal-contrib/contributions/modules/content_access/Attic/content_access.admin.inc,v
+retrieving revision 1.1.2.24
+diff -u -p -r1.1.2.24 content_access.admin.inc
+--- content_access.admin.inc	19 Jul 2010 11:40:11 -0000	1.1.2.24
++++ content_access.admin.inc	23 Dec 2010 11:13:04 -0000
+@@ -13,14 +13,14 @@ define('CONTENT_ACCESS_MASS_UPDATE_THRES
+ /**
+  * Per node settings page.
+  */
+-function content_access_page(&$form_state, $node) {
+-  drupal_set_title(t('Access control for %title', array('%title' => $node->title)));
++function content_access_page($form, &$form_state, $node) {
++  drupal_set_title(t('Access control for @title', array('@title' => $node->title)));
+ 
+   foreach (_content_access_get_operations() as $op) {
+     $defaults[$op] = content_access_per_node_setting($op, $node);
+   }
+ 
+-  $form = content_access_role_based_form($defaults);
++  $form = content_access_role_based_form($form, $defaults);
+   // Add a after_build handler that disables checkboxes, which are enforced by permissions.
+   $form['per_role']['#after_build'] = array('content_access_force_permissions');
+ 
+@@ -35,9 +35,9 @@ function content_access_page(&$form_stat
+     );
+     foreach (array('view', 'update', 'delete') as $op) {
+       $acl_id = content_access_get_acl_id($node, $op);
+-      acl_node_add_acl($node->nid, $acl_id, $op == 'view', $op == 'update', $op == 'delete', content_access_get_settings('priority', $node->type));
+-      $form['acl'][$op] = acl_edit_form($acl_id, t('Grant !op access', array('!op' => $op)));
+-      $form['acl'][$op]['#collapsed'] = !isset($_POST['acl_'. $acl_id]) && !unserialize($form['acl'][$op]['user_list']['#default_value']);
++      acl_node_add_acl($node->nid, $acl_id, (int) ($op == 'view'), (int) ($op == 'update'), (int) ($op == 'delete'), content_access_get_settings('priority', $node->type));
++      $form['acl'][$op] = acl_edit_form($form_state, $acl_id, t('Grant !op access', array('!op' => $op)));
++      $form['acl'][$op]['#collapsed'] = !isset($_POST['acl_' . $acl_id]) && !unserialize($form['acl'][$op]['user_list']['#default_value']);
+     }
+   }
+ 
+@@ -70,6 +70,7 @@ function content_access_page_submit($for
+     // Set the settings so that further calls will return this settings.
+     $settings[$op] = array_keys(array_filter($form_state['values'][$op]));
+   }
++
+   // Save per-node settings.
+   content_access_save_per_node_settings($node, $settings);
+ 
+@@ -96,7 +97,9 @@ function content_access_page_reset($form
+ /**
+  * Per content type administration page form.
+  */
+-function content_access_admin_settings(&$form_state, $type) {
++function content_access_admin_settings($form, &$form_state, $content_type) {
++  $type = $content_type->type;
++
+   $form_state['type'] = $type;
+ 
+   // Add role based per content type settings
+@@ -104,14 +107,14 @@ function content_access_admin_settings(&
+   foreach (_content_access_get_operations() as $op) {
+     $defaults[$op] = content_access_get_settings($op, $type);
+   }
+-  $form = content_access_role_based_form($defaults);
++  $form = content_access_role_based_form($form, $defaults);
+ 
+   // Per node:
+   $form['node'] = array(
+     '#type' => 'fieldset',
+     '#title' => t('Per content node access control settings'),
+     '#collapsible' => TRUE,
+-    '#description' => t('Optionally you can enable per content node access control settings. If enabled, a new tab for the content access settings appears when viewing content. You have to configure permission to access these settings at the !permissions page.', array('!permissions' => l(t('permissions'), 'admin/user/permissions'))),
++    '#description' => t('Optionally you can enable per content node access control settings. If enabled, a new tab for the content access settings appears when viewing content. You have to configure permission to access these settings at the !permissions page.', array('!permissions' => l(t('permissions'), 'admin/people/permissions'))),
+   );
+   $form['node']['per_node'] = array(
+     '#type' => 'checkbox',
+@@ -140,11 +143,17 @@ function content_access_admin_settings(&
+ }
+ 
+ function content_access_admin_settings_submit($form, &$form_state) {
+-  // Where possible let the drupal permissions system handle access control.
+-  $permissions = content_access_get_permissions_by_role();
++  $permissions = user_role_permissions(user_roles());
++
+   foreach (array('update', 'update_own', 'delete', 'delete_own') as $op) {
+     foreach ($form_state['values'][$op] as $rid => $value) {
+-      $permissions[$rid][ content_access_get_permission_by_op($op, $form_state['type']) ] = $value;
++      $permission = content_access_get_permission_by_op($op, $form_state['type']);
++      if ($value) {
++        $permissions[$rid][$permission] = TRUE;
++      }
++      else {
++        $permissions[$rid][$permission] = FALSE;
++      }
+     }
+     // Don't save the setting, so its default value (get permission) is applied always.
+     unset($form_state['values'][$op]);
+@@ -176,7 +185,7 @@ function content_access_admin_settings_s
+     }
+ 
+     if (content_access_mass_update(array($type))) {
+-      drupal_set_message(t('Permissions have been successfully rebuilt for the content type @types.', array('@types' => node_get_types('name', $type))));
++      drupal_set_message(t('Permissions have been successfully rebuilt for the content type @types.', array('@types' => node_type_get_name($type))));
+     }
+   }
+ 
+@@ -191,13 +200,18 @@ function content_access_admin_settings_s
+  *   Whether the operation has been processed successfully (TRUE) or postponed (FALSE).
+  */
+ function content_access_mass_update($types) {
+-  $count = db_result(db_query("SELECT COUNT(DISTINCT nid) FROM {node} WHERE type IN (". db_placeholders($types, 'text') .")", $types));
++  $q = db_select('node', 'n')
++    ->fields('n', array('nid'))
++    ->condition('n.type', $types, 'IN');
++
++  $count = $q->countQuery()->execute()->fetchField();
++
+   node_access_needs_rebuild(TRUE);
+ 
+   // If there not too much nodes affected, try to do it.
+   if ($count <= CONTENT_ACCESS_MASS_UPDATE_THRESHOLD) {
+-    $result = db_query("SELECT nid FROM {node} WHERE type IN (". db_placeholders($types, 'text') .")", $types);
+-    while ($node = db_fetch_object($result)) {
++    $records = $q->execute();
++    foreach ($records as $node) {
+       node_access_acquire_grants(node_load($node->nid));
+     }
+ 
+@@ -209,30 +223,12 @@ function content_access_mass_update($typ
+ }
+ 
+ /**
+- * Gets the permissions for the role of the given id.
+- */
+-function content_access_get_permissions_by_role() {
+-  $result = db_query('SELECT r.rid, p.perm FROM {role} r LEFT JOIN {permission} p ON r.rid = p.rid');
+-  $permissions = array();
+-  while ($role = db_fetch_object($result)) {
+-    $permissions[$role->rid] = array_filter(drupal_map_assoc(explode(', ', $role->perm)));
+-  }
+-  return $permissions;
+-}
+-
+-/**
+  * Saves the given permissions by role to the database.
+  */
+-function content_access_save_permissions($permissions) {
+-  foreach ($permissions as $rid => $perms) {
+-    $perms = array_filter($perms);
+-    db_query('DELETE FROM {permission} WHERE rid = %d', $rid);
+-    if (count($perms)) {
+-      db_query("INSERT INTO {permission} (rid, perm) VALUES (%d, '%s')", $rid, implode(', ', array_keys($perms)));
+-    }
++function content_access_save_permissions($roles_permissions) {
++  foreach ($roles_permissions as $rid => $permissions) {
++    user_role_change_permissions($rid, $permissions);
+   }
+-  // Make sure new permissions are applied immediately.
+-  content_access_get_permission_access(FALSE, TRUE);
+ }
+ 
+ /**
+@@ -241,8 +237,7 @@ function content_access_save_permissions
+  * @param $defaults
+  *   Array of defaults for all operations.
+  */
+-function content_access_role_based_form($defaults = array()) {
+-
++function content_access_role_based_form($form, $defaults = array()) {
+   // Make sure defaults are set properly
+   foreach (_content_access_get_operations() as $op) {
+     $defaults += array($op => array());
+@@ -254,8 +249,8 @@ function content_access_role_based_form(
+     '#type' => 'fieldset',
+     '#title' => t('Role based access control settings'),
+     '#collapsible' => TRUE,
+-    '#description' => t('Note that users need at least the %access_content permission to be able to deal in any way with content.', array('%access_content' => t('access content'))).
+-      ' '. t('Furthermore note that content which is not @published is treated in a different way by drupal: It can be viewed only by its author or users with the %administer_nodes permission.', array('@published' => t('published'), '%administer_nodes' => t('administer nodes'))),
++    '#description' => t('Note that users need at least the %access_content permission to be able to deal in any way with content.', array('%access_content' => t('access content'))) .
++      ' ' . t('Furthermore note that content which is not @published is treated in a different way by drupal: It can be viewed only by its author or users with the %administer_nodes permission.', array('@published' => t('published'), '%administer_nodes' => t('administer nodes'))),
+   );
+   drupal_add_css(drupal_get_path('module', 'content_access') . '/content_access.css');
+   $form['per_role']['view'] = array('#type' => 'checkboxes',
+@@ -264,7 +259,7 @@ function content_access_role_based_form(
+     '#options' => $roles,
+     '#title' => t('View any content'),
+     '#default_value' => $defaults['view'],
+-    '#process' => array('expand_checkboxes', 'content_access_disable_checkboxes'),
++    '#process' => array('form_process_checkboxes', 'content_access_disable_checkboxes'),
+   );
+   $form['per_role']['update'] = array('#type' => 'checkboxes',
+     '#prefix' => '<div class="content_access-div">',
+@@ -272,7 +267,7 @@ function content_access_role_based_form(
+     '#options' => $roles,
+     '#title' => t('Edit any content'),
+     '#default_value' => $defaults['update'],
+-    '#process' => array('expand_checkboxes', 'content_access_disable_checkboxes'),
++    '#process' => array('form_process_checkboxes', 'content_access_disable_checkboxes'),
+   );
+   $form['per_role']['delete'] = array('#type' => 'checkboxes',
+     '#prefix' => '<div class="content_access-div">',
+@@ -280,18 +275,15 @@ function content_access_role_based_form(
+     '#options' => $roles,
+     '#title' => t('Delete any content'),
+     '#default_value' => $defaults['delete'],
+-    '#process' => array('expand_checkboxes', 'content_access_disable_checkboxes'),
+-  );
+-  $form['per_role']['clearer'] = array(
+-    '#value' => '<br clear="all" />',
++    '#process' => array('form_process_checkboxes', 'content_access_disable_checkboxes'),
+   );
+   $form['per_role']['view_own'] = array('#type' => 'checkboxes',
+-    '#prefix' => '<div class="content_access-div">',
++    '#prefix' => '<div class="content_access-div new-row">',
+     '#suffix' => '</div>',
+     '#options' => $roles,
+     '#title' => t('View own content'),
+     '#default_value' => $defaults['view_own'],
+-    '#process' => array('expand_checkboxes', 'content_access_disable_checkboxes'),
++    '#process' => array('form_process_checkboxes', 'content_access_disable_checkboxes'),
+   );
+   $form['per_role']['update_own'] = array('#type' => 'checkboxes',
+     '#prefix' => '<div class="content_access-div">',
+@@ -299,7 +291,7 @@ function content_access_role_based_form(
+     '#options' => $roles,
+     '#title' => t('Edit own content'),
+     '#default_value' => $defaults['update_own'],
+-    '#process' => array('expand_checkboxes', 'content_access_disable_checkboxes'),
++    '#process' => array('form_process_checkboxes', 'content_access_disable_checkboxes'),
+   );
+   $form['per_role']['delete_own'] = array('#type' => 'checkboxes',
+     '#prefix' => '<div class="content_access-div">',
+@@ -307,7 +299,7 @@ function content_access_role_based_form(
+     '#options' => $roles,
+     '#title' => t('Delete own content'),
+     '#default_value' => $defaults['delete_own'],
+-    '#process' => array('expand_checkboxes', 'content_access_disable_checkboxes'),
++    '#process' => array('form_process_checkboxes', 'content_access_disable_checkboxes'),
+   );
+   $form['per_role']['clearer'] = array(
+     '#value' => '<br clear="all" />',
+@@ -326,21 +318,20 @@ function content_access_disable_checkbox
+     if (!in_array($key, $access_roles) && !($key != DRUPAL_ANONYMOUS_RID && in_array(DRUPAL_AUTHENTICATED_RID, $access_roles))) {
+       $element[$key]['#disabled'] = TRUE;
+       $element[$key]['#default_value'] = FALSE;
+-      $element[$key]['#prefix'] = '<span title="'. t("This role is lacking the permission '@perm', so it has no access.", array('@perm' => t('access content'))) .'">';
++      $element[$key]['#prefix'] = '<span title="' . t("This role is lacking the permission '@perm', so it has no access.", array('@perm' => t('access content'))) . '">';
+       $element[$key]['#suffix'] = "</span>";
+     }
+-    else if (in_array($key, $admin_roles) || ($key != DRUPAL_ANONYMOUS_RID && in_array(DRUPAL_AUTHENTICATED_RID, $admin_roles))) {
++    elseif (in_array($key, $admin_roles) || ($key != DRUPAL_ANONYMOUS_RID && in_array(DRUPAL_AUTHENTICATED_RID, $admin_roles))) {
+       // Fix the checkbox to be enabled for users with administer node privileges
+       $element[$key]['#disabled'] = TRUE;
+       $element[$key]['#default_value'] = TRUE;
+-      $element[$key]['#prefix'] = '<span title="'. t("This role has '@perm' permission, so access is granted.", array('@perm' => t('administer nodes'))) .'">';
++      $element[$key]['#prefix'] = '<span title="' . t("This role has '@perm' permission, so access is granted.", array('@perm' => t('administer nodes'))) . '">';
+       $element[$key]['#suffix'] = "</span>";
+     }
+   }
+   return $element;
+ }
+ 
+-
+ /**
+  * Formapi #after_build callback, that disables checkboxes for roles without access to content.
+  */
+@@ -350,15 +341,13 @@ function content_access_force_permission
+       $element[$op][$rid]['#disabled'] = TRUE;
+       $element[$op][$rid]['#attributes']['disabled'] = 'disabled';
+       $element[$op][$rid]['#value'] = TRUE;
+-      $element[$op][$rid]['#prefix'] = '<span title="'. t("Permission is granted due to the content type's access control settings.") .'">';
++      $element[$op][$rid]['#prefix'] = '<span title="' . t("Permission is granted due to the content type's access control settings.") . '">';
+       $element[$op][$rid]['#suffix'] = "</span>";
+     }
+   }
+   return $element;
+ }
+ 
+-
+-
+ /**
+  * Submit callback for the user permissions form.
+  * Trigger changes to node permissions to rebuild our grants.
+@@ -392,11 +381,23 @@ function _content_access_get_node_permis
+ }
+ 
+ /**
++ * Gets the content access acl id of the node.
++ */
++function content_access_get_acl_id($node, $op) {
++  $acl_id = acl_get_id_by_name('content_access', $op . '_' . $node->nid);
++  if (!$acl_id) {
++    // Create one:
++    $acl_id = acl_create_new_acl('content_access', $op . '_' . $node->nid);
++  }
++  return $acl_id;
++}
++
++/**
+  * Detaches all our ACLs for the nodes of the given type.
+  */
+ function _content_access_remove_acls($type) {
+-  $result = db_query("SELECT n.nid FROM {node} n WHERE type = '%s'", $type);
+-  while ($node = db_fetch_object($result)) {
++  $result = db_query("SELECT n.nid FROM {node} n WHERE type = :type", array('type' => $type));
++  foreach ($result as $node) {
+     acl_node_clear_acls($node->nid, 'content_access');
+   }
+-}
++}
+\ No newline at end of file
+Index: content_access.info
+===================================================================
+RCS file: /cvs/drupal-contrib/contributions/modules/content_access/Attic/content_access.info,v
+retrieving revision 1.1.4.1
+diff -u -p -r1.1.4.1 content_access.info
+--- content_access.info	30 Jun 2008 08:56:27 -0000	1.1.4.1
++++ content_access.info	23 Dec 2010 11:13:04 -0000
+@@ -1,5 +1,10 @@
+ ; $Id: content_access.info,v 1.1.4.1 2008/06/30 08:56:27 fago Exp $
+ name = Content Access
+-description = Provides flexible content access control
++description = Provides flexible content access control.
++core = 7.x
+ package = Access control
+-core = "6.x"
+\ No newline at end of file
++dependencies[] = acl
++files[] = content_access.install
++files[] = content_access.module
++files[] = content_access.admin.inc
++files[] = content_access.rules.inc
+\ No newline at end of file
+Index: content_access.install
+===================================================================
+RCS file: /cvs/drupal-contrib/contributions/modules/content_access/Attic/content_access.install,v
+retrieving revision 1.1.4.3
+diff -u -p -r1.1.4.3 content_access.install
+--- content_access.install	28 Oct 2008 13:36:17 -0000	1.1.4.3
++++ content_access.install	23 Dec 2010 11:13:04 -0000
+@@ -2,20 +2,16 @@
+ // $Id: content_access.install,v 1.1.4.3 2008/10/28 13:36:17 fago Exp $
+ 
+ /**
+- * Implementation of hook_install().
++ * @file
++ * Install Content Access DB schema.
++ *
+  */
+-function content_access_install() {
+-  // Create tables.
+-  drupal_install_schema('content_access');
+-}
+ 
+ /**
+  * Implementation of hook_uninstall().
+  */
+ function content_access_uninstall() {
+   variable_del('content_access_settings');
+-  // Remove tables.
+-  drupal_uninstall_schema('content_access');
+ }
+ 
+ /**
+@@ -29,52 +25,16 @@ function content_access_schema() {
+         'unsigned' => TRUE,
+         'not null' => TRUE,
+         'default' => 0
+-        ),
++      ),
+       'settings' => array(
+         'type' => 'text',
+         'not null' => FALSE,
+         'size' => 'medium'
+-        ),
++      ),
+     ),
+     'primary key' => array('nid')
+   );
+   return $schema;
+ }
+ 
+-
+-/**
+- * Upgrade from d5 to d6
+- */
+-function content_access_update_6001() {
+-  drupal_load('module', 'content_access');
+-  module_load_include('inc', 'content_access', 'content_access.admin');
+-
+-  // Migrate old ca settings to new available d6 permissions
+-  $permissions = content_access_get_permissions_by_role();
+-  $settings = content_access_get_settings();
+-  
+-  foreach (node_get_types('names') as $type => $type_name) {
+-    foreach (array('update', 'delete') as $op) {
+-      // Set permission for roles that are allowed to access
+-      foreach (content_access_get_settings($op, $type) as $rid => $value) {
+-        if (is_numeric($rid)) {
+-          $permissions[$rid][ content_access_get_permission_by_op($op, $type) ] = TRUE;
+-        }
+-        else if ($rid == 'author') {
+-          // CA 5.x let authors access, but only if they were authenticated. So we set the d6 permissions like this.
+-          $permissions[DRUPAL_AUTHENTICATED_RID][ content_access_get_permission_by_op($op . '_own', $type) ] = TRUE;
+-        }
+-      }
+-      // Make sure to delete the old setting, so that the defaults (permissions) will be used.
+-      unset($settings[$op][$type]);
+-    }
+-  }
+-  content_access_save_permissions($permissions);
+-  content_access_set_settings($settings);
+-
+-  // Rebuild node access for all nodes
+-  node_access_needs_rebuild(TRUE);
+-
+-  return array();
+-}
+-
++//@todo: do we need an upgrade function from D6 to D7?
+\ No newline at end of file
+Index: content_access.module
+===================================================================
+RCS file: /cvs/drupal-contrib/contributions/modules/content_access/Attic/content_access.module,v
+retrieving revision 1.1.2.9.2.22
+diff -u -p -r1.1.2.9.2.22 content_access.module
+--- content_access.module	2 Sep 2010 13:13:33 -0000	1.1.2.9.2.22
++++ content_access.module	23 Dec 2010 11:13:04 -0000
+@@ -5,6 +5,15 @@
+  * @file Content access module file.
+  */
+ 
++/**
++ * Implements hook_admin_paths().
++ */
++function content_access_admin_paths() {
++  $paths = array(
++    'node/*/access' => TRUE,
++  );
++  return $paths;
++}
+ 
+ /**
+  * Implementation of hook_menu().
+@@ -13,54 +22,45 @@ function content_access_menu() {
+   $items = array();
+ 
+   $items['node/%node/access'] = array(
+-    'title' => 'Access control',
++    'title' => 'Access Control',
+     'page callback' => 'drupal_get_form',
+     'page arguments' => array('content_access_page', 1),
+     'access callback' => 'content_access_node_page_access',
+     'access arguments' => array(1),
+     'file' => 'content_access.admin.inc',
++    'theme callback' => '_node_custom_theme',
++    'type' => MENU_LOCAL_TASK,
+     'weight' => 3,
+-    'type' => MENU_LOCAL_TASK
+   );
+ 
+-  foreach (node_get_types('types', NULL, TRUE) as $type) {
+-    $type_url_str = str_replace('_', '-', $type->type);
+-    $items['admin/content/node-type/'. $type_url_str .'/access'] = array(
+-      'title' => 'Access control',
+-      'description' => 'Configure content access control.',
+-      'page callback' => 'drupal_get_form',
+-      'page arguments' => array('content_access_admin_settings', $type->type),
+-      'access callback' => 'content_access_admin_settings_access',
+-      'access arguments' => array(),
+-      'type' => MENU_LOCAL_TASK,
+-      'file' => 'content_access.admin.inc',
+-      'weight' => 1,
+-    );
+-  }
++  $items['admin/structure/types/manage/%node_type/access'] = array(
++    'title' => 'Access Control',
++    'description' => 'Configure content access control.',
++    'page callback' => 'drupal_get_form',
++    'page arguments' => array('content_access_admin_settings', 4),
++    'access callback' => 'content_access_admin_settings_access',
++    'access arguments' => array(),
++    'type' => MENU_LOCAL_TASK,
++    'file' => 'content_access.admin.inc',
++    'theme callback' => '_node_custom_theme',
++    'weight' => 1,
++  );
++
+   return $items;
+ }
+ 
+ /**
+- * Implementation of hook_init().
+- *
+- * Make node access settings page use admin theme if appropriate.
+- *
+- * @see system_init()
++ * Get access tab page for the viewed node.
+  */
+-function content_access_init() {
+-  // Use the administrative theme if the user is looking at a page at node/%/access
+-  if (variable_get('node_admin_theme', '0') && arg(0) == 'node' && arg(2) == 'access') {
+-    global $custom_theme;
+-    $custom_theme = variable_get('admin_theme', '0');
+-    drupal_add_css(drupal_get_path('module', 'system') .'/admin.css', 'module');
+-  }
+-}
+-
+ function content_access_node_page_access($node) {
+   global $user;
+-  return content_access_get_settings('per_node', $node->type) && user_access('grant content access') || content_access_get_settings('per_node', $node->type) && (user_access('grant own content access') && ($user->uid == $node->uid));
++  return content_access_get_settings('per_node', $node->type) && user_access('grant content access') ||
++    content_access_get_settings('per_node', $node->type) && (user_access('grant own content access') && ($user->uid == $node->uid));
+ }
+ 
++/**
++ * Content access settings for content type.
++ */
+ function content_access_admin_settings_access() {
+   return user_access('administer nodes') && user_access('administer content types');
+ }
+@@ -68,8 +68,17 @@ function content_access_admin_settings_a
+ /**
+  * Implementation of hook_perm().
+  */
+-function content_access_perm() {
+-  return array('grant content access', 'grant own content access');
++function content_access_permission() {
++  return array(
++    'grant content access' => array(
++      'title' => t('Grant Content Access'),
++      'description' => t('View and modify content access for any nodes'),
++    ),
++    'grant own content access' => array(
++      'title' => t('Grant Own Content Access'),
++      'description' => t('View and modify content access for own nodes'),
++    ),
++  );
+ }
+ 
+ /**
+@@ -83,7 +92,7 @@ function content_access_node_grants($acc
+ }
+ 
+ /**
+- * Implementation of hook_node_access_records()
++ * Implementation of hook_node_access_records().
+  */
+ function content_access_node_access_records($node) {
+   if (content_access_disabling()) {
+@@ -95,19 +104,21 @@ function content_access_node_access_reco
+     $grants = array();
+     foreach (array('view', 'update', 'delete') as $op) {
+       foreach (content_access_get_rids_per_node_op($op, $node) as $rid) {
+-        $grants[$rid]['grant_'. $op] = 1;
++        $grants[$rid]['grant_' . $op] = 1;
+       }
+     }
+     foreach ($grants as $rid => $grant) {
+       $grants[$rid] = content_access_proccess_grant($grant, $rid, $node);
+     }
++
+     // Care for the author grant.
+     $grant = array();
+     foreach (array('view', 'update', 'delete') as $op) {
+       // Get all roles that have access to use $op on this node.
+       $any_roles = drupal_map_assoc(content_access_per_node_setting($op, $node));
++      $any_roles = $any_roles ? $any_roles : array();
+       $any_roles += ($op != 'view') ? content_access_get_settings($op, $node->type) : array();
+-      $grant['grant_'. $op] = content_access_own_op($node, $any_roles, content_access_get_rids_per_node_op($op .'_own', $node));
++      $grant['grant_' . $op] = content_access_own_op($node, $any_roles, content_access_get_rids_per_node_op($op . '_own', $node));
+     }
+ 
+     if (array_filter($grant)) {
+@@ -127,16 +138,17 @@ function content_access_node_access_reco
+   else {
+     content_access_optimize_grants($grants, $node);
+   }
++
+   return $grants;
+ }
+ 
+ /**
+- * Implementation of hook_nodeapi().
++ * Implementation of hook_node_delete().
+  */
+-function content_access_nodeapi($node, $op, $teaser, $page) {
+-  if ($op == 'delete') {
+-    db_query("DELETE FROM {content_access} WHERE nid = %d", $node->nid);
+-  }
++function content_access_node_delete($node) {
++  db_delete('content_access')
++    ->condition('nid', $node->nid)
++    ->execute();
+ }
+ 
+ /**
+@@ -183,6 +195,7 @@ function content_access_get_settings($re
+   }
+   if (!isset($type)) {
+     $settings = content_access_get_settings();
++
+     return isset($settings[$return]) ? $settings[$return] : array();
+   }
+   return array();
+@@ -229,6 +242,8 @@ function content_access_get_setting_defa
+       return content_access_get_permission_access(content_access_get_permission_by_op($setting, $type));
+     case 'priority':
+       return 0;
++     case 'per_node' :
++      return array();
+   }
+ }
+ 
+@@ -255,13 +270,13 @@ function content_access_get_permission_b
+     default:
+       return FALSE;
+     case 'update':
+-      return 'edit any '. $type .' content';
++      return 'edit any ' . $type . ' content';
+     case 'update_own':
+-      return 'edit own '. $type .' content';
++      return 'edit own ' . $type . ' content';
+     case 'delete':
+-      return 'delete any '. $type .' content';
++      return 'delete any ' . $type . ' content';
+     case 'delete_own':
+-      return 'delete own '. $type .' content';
++      return 'delete own ' . $type . ' content';
+   }
+ }
+ 
+@@ -317,8 +332,9 @@ function content_access_own_op($node, $a
+ 
+   if (!isset($roles[$node->uid])) {
+     $roles[$node->uid] = $node->uid ? array(DRUPAL_AUTHENTICATED_RID) : array(DRUPAL_ANONYMOUS_RID);
+-    $result = db_query('SELECT rid FROM {users_roles} WHERE uid = %d', $node->uid);
+-    while ($role = db_fetch_object($result)) {
++    $result = db_query('SELECT rid FROM {users_roles} WHERE uid = :uid', array(':uid' => $node->uid));
++
++    foreach ($result as $role) {
+       $roles[$node->uid][] = $role->rid;
+     }
+   }
+@@ -343,9 +359,11 @@ function content_access_own_op($node, $a
+  */
+ function content_access_get_rids_per_node_op($op, $node) {
+   $rids = content_access_per_node_setting($op, $node);
++
+   if ($permission = content_access_get_permission_by_op($op, $node->type)) {
+     $perm_roles = content_access_get_permission_access($permission);
+     $rids = array_diff($rids, $perm_roles);
++
+     if (in_array(DRUPAL_AUTHENTICATED_RID, $perm_roles)) {
+       return in_array(DRUPAL_ANONYMOUS_RID, $rids) ? array(DRUPAL_ANONYMOUS_RID, DRUPAL_AUTHENTICATED_RID) : array(DRUPAL_AUTHENTICATED_RID);
+     }
+@@ -386,9 +404,19 @@ function content_access_per_node_setting
+  * Saves custom per node settings in the own content_access table.
+  */
+ function content_access_save_per_node_settings($node, $settings) {
+-  db_query("UPDATE {content_access} SET settings = '%s' WHERE nid = %d", serialize($settings), $node->nid);
+-  if (!db_affected_rows()) {
+-    db_query("INSERT INTO {content_access} (nid, settings) VALUES(%d, '%s')", $node->nid, serialize($settings));
++  db_update('content_access')
++    ->condition('nid', $node->nid)
++    ->fields(array('settings' => serialize($settings)))
++    ->execute();
++
++  $count = db_query('SELECT COUNT(nid) FROM {content_access} WHERE nid = :nid', array(
++    ':nid' => $node->nid,
++  ))->fetchField();
++
++  if (!$count) {
++    db_insert('content_access')
++      ->fields(array('nid' => $node->nid, 'settings' => serialize($settings)))
++      ->execute();
+   }
+   // Make content_access_per_node_setting() use the new settings
+   content_access_per_node_setting(NULL, $node, $settings);
+@@ -398,9 +426,13 @@ function content_access_save_per_node_se
+  * Deletes all custom per node settings, so that content type defaults are used again.
+  */
+ function content_access_delete_per_node_settings($node) {
+-  db_query("DELETE FROM {content_access} WHERE nid = %d", $node->nid);
++  db_delete('content_access')
++    ->condition('nid', $node->nid)
++    ->execute();
++
+   // Clear the cache.
+   content_access_per_node_setting(NULL, $node, FALSE);
++
+   // Delete possible acl settings
+   if (module_exists('acl')) {
+     foreach (array('view', 'update', 'delete') as $op) {
+@@ -411,18 +443,6 @@ function content_access_delete_per_node_
+ }
+ 
+ /**
+- * Gets the content access acl id of the node.
+- */
+-function content_access_get_acl_id($node, $op) {
+-  $acl_id = acl_get_id_by_name('content_access', $op .'_'. $node->nid);
+-  if (!$acl_id) {
+-    // Create one:
+-    $acl_id = acl_create_new_acl('content_access', $op .'_'. $node->nid);
+-  }
+-  return $acl_id;
+-}
+-
+-/**
+  * Gets the per node settings of a node.
+  *
+  * @note
+@@ -430,11 +450,13 @@ function content_access_get_acl_id($node
+  *   it will return an empty array.
+  */
+ function content_access_get_per_node_settings($node) {
+-  $settings = db_result(db_query("SELECT settings FROM {content_access} WHERE nid = %d", $node->nid));
+-  if (!$settings) {
+-    return array();
++  foreach (db_query("SELECT settings FROM {content_access} WHERE nid = :nid", array(':nid' => $node->nid)) as $record) {
++    $settings = $record->settings;
++    if (!$settings) {
++      return array();
++    }
++    return unserialize($settings);
+   }
+-  return unserialize($settings);
+ }
+ 
+ /**
+@@ -445,13 +467,15 @@ function content_access_get_per_node_set
+  */
+ function content_access_optimize_grants(&$grants, $node) {
+   $rids = array('view' => array(), 'update' => array(), 'delete' => array());
++
+   foreach ($grants as $key => $grant) {
+     foreach (array('view', 'update', 'delete') as $op) {
+-      if (is_numeric($key) && !empty($grant['grant_'. $op])) {
++      if (is_numeric($key) && !empty($grant['grant_' . $op])) {
+         $rids[$op][] = $key;
+       }
+     }
+   }
++
+   // Detect if all are allowed to view
+   $all = array(DRUPAL_ANONYMOUS_RID, DRUPAL_AUTHENTICATED_RID);
+   if (count(array_diff($all, $rids['view'])) == 0) {
+@@ -459,6 +483,7 @@ function content_access_optimize_grants(
+     $rids['view'] = array('all');
+     $grants['all'] = array('realm' => 'all', 'gid' => 0, 'grant_view' => 1, 'grant_update' => 0, 'grant_delete' => 0, 'priority' => content_access_get_settings('priority', $node->type));
+   }
++
+   // If authenticated users are involved, remove unnecessary other roles.
+   foreach (array('view', 'update', 'delete') as $op) {
+     if (in_array(DRUPAL_AUTHENTICATED_RID, $rids[$op])) {
+@@ -472,7 +497,7 @@ function content_access_optimize_grants(
+       continue;
+     }
+     foreach (array('view', 'update', 'delete') as $op) {
+-      if ($grant['grant_'. $op] && in_array($key, $rids[$op])) {
++      if ($grant['grant_' . $op] && in_array($key, $rids[$op])) {
+         //it's still here, so we can't remove this grant
+         continue 2;
+       }
+@@ -483,8 +508,25 @@ function content_access_optimize_grants(
+ }
+ 
+ /**
+- * Implementation of hook_node_type():
+- * Update settings on node type name change.
++ * Implementation of hook_node_type().
++ *
++ * Updates settings on node type name delete.
++ */
++function content_access_node_type_delete($info) {
++  content_access_node_type('delete', $info);
++}
++
++/**
++ * Implementation of hook_node_type().
++ *
++ * Updates settings on node type name change.
++ */
++function content_access_node_type_update($info) {
++  content_access_node_type('update', $info);
++}
++
++/**
++ * Implementation of hook_node_type().
+  */
+ function content_access_node_type($op, $info) {
+   switch ($op) {

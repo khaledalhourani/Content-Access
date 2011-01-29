@@ -1,0 +1,10 @@
+; $Id: content_access.info,v 1.1.4.1 2008/06/30 08:56:27 fago Exp $
+name = Content Access
+description = Provides flexible content access control.
+core = 7.x
+package = Access control
+dependencies[] = acl
+files[] = content_access.install
+files[] = content_access.module
+files[] = content_access.admin.inc
+files[] = content_access.rules.inc
