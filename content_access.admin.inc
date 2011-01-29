@@ -95,9 +95,9 @@ function content_access_page_reset($form, &$form_state) {
 }
 
 /**
- * Per content type administration page form.
+ * Per content type settings form.
  */
-function content_access_admin_settings($form, &$form_state, $content_type) {
+function content_access_admin_settings($form, $form_state, $content_type) {
   $type = $content_type->type;
 
   $form_state['type'] = $type;
@@ -139,26 +139,41 @@ function content_access_admin_settings($form, &$form_state, $content_type) {
     '#value' => t('Submit'),
     '#weight' => 10,
   );
+
   return $form;
 }
 
+/**
+ * Submit handler for per content type settings form.
+ */
 function content_access_admin_settings_submit($form, &$form_state) {
-  $permissions = user_role_permissions(user_roles());
+  $roles_permissions = user_role_permissions(user_roles());
+  $permissions = user_permission_get_modules();
+
+  // Remove disabled modules permissions, so they can't raise exception
+  // in content_access_save_permissions()
+  foreach ($roles_permissions as $rid => $role_permissions) {
+    foreach ($role_permissions as $permission => $value) {
+      if (!array_key_exists($permission, $permissions)) {
+        unset($roles_permissions[$rid][$permission]);
+      }
+    }
+  }
 
   foreach (array('update', 'update_own', 'delete', 'delete_own') as $op) {
     foreach ($form_state['values'][$op] as $rid => $value) {
       $permission = content_access_get_permission_by_op($op, $form_state['type']);
       if ($value) {
-        $permissions[$rid][$permission] = TRUE;
+        $roles_permissions[$rid][$permission] = TRUE;
       }
       else {
-        $permissions[$rid][$permission] = FALSE;
+        $roles_permissions[$rid][$permission] = FALSE;
       }
     }
     // Don't save the setting, so its default value (get permission) is applied always.
     unset($form_state['values'][$op]);
   }
-  content_access_save_permissions($permissions);
+  content_access_save_permissions($roles_permissions);
 
   // Update content access settings
   $settings = content_access_get_settings();
