@@ -20,7 +20,7 @@ function content_access_page($form, &$form_state, $node) {
     $defaults[$op] = content_access_per_node_setting($op, $node);
   }
 
-  $form = content_access_role_based_form($form, $defaults);
+  content_access_role_based_form($form, $defaults);
   // Add a after_build handler that disables checkboxes, which are enforced by permissions.
   $form['per_role']['#after_build'] = array('content_access_force_permissions');
 
@@ -107,7 +107,7 @@ function content_access_admin_settings($form, $form_state, $content_type) {
   foreach (_content_access_get_operations() as $op) {
     $defaults[$op] = content_access_get_settings($op, $type);
   }
-  $form = content_access_role_based_form($form, $defaults);
+  content_access_role_based_form($form, $defaults);
 
   // Per node:
   $form['node'] = array(
@@ -252,13 +252,16 @@ function content_access_save_permissions($roles_permissions) {
  * @param $defaults
  *   Array of defaults for all operations.
  */
-function content_access_role_based_form($form, $defaults = array()) {
+function content_access_role_based_form(&$form, $defaults = array()) {
   // Make sure defaults are set properly
   foreach (_content_access_get_operations() as $op) {
     $defaults += array($op => array());
   }
 
   $roles = array_map('filter_xss_admin', user_roles());
+
+  drupal_add_css(drupal_get_path('module', 'content_access') . '/content_access.css');
+
   // Per type:
   $form['per_role'] = array(
     '#type' => 'fieldset',
@@ -267,7 +270,7 @@ function content_access_role_based_form($form, $defaults = array()) {
     '#description' => t('Note that users need at least the %access_content permission to be able to deal in any way with content.', array('%access_content' => t('access content'))) .
       ' ' . t('Furthermore note that content which is not @published is treated in a different way by drupal: It can be viewed only by its author or users with the %administer_nodes permission.', array('@published' => t('published'), '%administer_nodes' => t('administer nodes'))),
   );
-  drupal_add_css(drupal_get_path('module', 'content_access') . '/content_access.css');
+
   $form['per_role']['view'] = array('#type' => 'checkboxes',
     '#prefix' => '<div class="content_access-div">',
     '#suffix' => '</div>',

@@ -436,6 +436,7 @@ function content_access_delete_per_node_settings($node) {
   // Delete possible acl settings
   if (module_exists('acl')) {
     foreach (array('view', 'update', 'delete') as $op) {
+      module_load_include('inc', 'content_access', 'content_access.admin');
       $acl_id = content_access_get_acl_id($node, $op);
       acl_delete_acl($acl_id);
     }

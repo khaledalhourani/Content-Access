@@ -5,23 +5,163 @@
  * Rules specific functions that expose content_access' API.
  */
 
-
 /**
- * Adds the role based settings to the form.
+ * Implementation of hook_action_info().
  */
-function content_access_rules_role_based_form($settings, &$form) {
-  module_load_include('inc', 'content_access', 'content_access.admin');
-  $form['#includes'][] = './'. drupal_get_path('module', 'content_access') .'/content_access.admin.inc';
-  $form += content_access_role_based_form($settings);
+function content_access_rules_action_info() {
+  $actions = array(
+    'content_access_action_grant_node_permissions' => array(
+      'label' => t('Grant content permissions by role'),
+    ),
+    'content_access_action_revoke_node_permissions' => array(
+      'label' => t('Revoke content permissions by role'),
+    ),
+    'content_access_action_reset_node_permissions' => array(
+      'label' => t('Reset content permissions'),
+    ),
+  );
+
+  $items = array();
+  foreach ($actions as $name => $action) {
+    $items[$name] = array(
+      'label' => $action['label'],
+      'named parameter' => TRUE,
+      'parameter' => array(
+        'node' => array(
+          'type' => 'node',
+          'label' => t('Content'),
+          'description' => t('Add Desc.'),
+        ),
+        'content_access' => array(
+          'type' => 'list<text>',
+          'label' => t('Role Based Access Control Settings'),
+          'optional' => TRUE,
+          'options list' => 'content_access_action_roles_permissions_list',
+        ),
+      ),
+      'group' => t('Content Access'),
+      'callbacks' => array(
+        #'access' => 'rules_action_entity_createfetch_access',
+        'form_alter' => 'content_access_action_form_alter',
+      ),
+    );
+  }
+
+  return $items;
 }
 
 /**
- * Parse submitted settings for per-node form into internal format.
+ * Desc.
  */
-function content_access_parse_settings(&$settings, $form, $form_state) {
+function content_access_action_roles_permissions_list() {
+  return _content_access_roles_list();
+}
+
+/**
+ * Returns an array of operations used by the module.
+ */
+function _content_access_roles_list() {
+  $defaults = array();
+  $roles = array_map('filter_xss_admin', user_roles());
+
+  // Make sure defaults are set properly
   foreach (_content_access_get_operations() as $op) {
-    $settings[$op] = array_keys(array_filter($form_state['values'][$op]));
+    foreach ($roles as $role) {
+      $defaults[$op][$op . ':' . $role] = $role;
+    }
   }
+
+  return $defaults;
+}
+
+/**
+ * Desc.
+ */
+function content_access_list_to_checkboxes($element) {
+  $checkboxes = array();
+
+  foreach (_content_access_get_operations() as $op) {
+    $checkboxes[$op] = $element;
+    $checkboxes[$op]['#title'] = t($op);
+    $checkboxes[$op]['#type'] = 'checkboxes';
+    $checkboxes[$op]['#options'] = $element['#options'][$op];
+    unset($checkboxes[$op]['#default_value']);
+
+    // Set defaults values of checkboxes
+    foreach ($checkboxes[$op]['#options'] as $op_role => $permission) {
+      if (isset($element['#default_value'][$op_role])) {
+        $checkboxes[$op]['#default_value'][] = $op_role;
+      }
+    }
+
+    #$checkboxes[$op]['#process'] = array('form_process_checkboxes', 'content_access_checkboxes');
+  }
+
+  return $checkboxes;
+}
+
+/**
+ * Desc.
+ */
+function content_access_checkboxes_to_list($element) {
+  $list = $element[key($element)];
+  $list['#title'] = 'Value';
+  $list['#type'] = 'select';
+  unset($list['#options']);
+
+  foreach ($element as $op => $value) {
+    $list['#options'][$op] = $value['#options'];
+  }
+  return $list;
+}
+
+/**
+ * Desc.
+ */
+function content_access_checkboxes_to_list_submit($element) {
+  $list = array();
+  foreach (_content_access_roles_list() as $op => $op_roles) {
+    foreach ($op_roles as $op_role => $permission) {
+      if (isset($element[$op][$op_role]) && $element[$op][$op_role]) {
+        $list[$op_role] = $permission;
+      }
+    }
+  }
+  return $list;
+}
+
+/**
+ * Desc.
+ */
+function content_access_action_form_alter(&$form, &$form_state) {
+  // Include content_access.admin.inc in order to use it's functions
+  // e.g. content_access_disable_checkboxes() in
+  // content_access_rules_role_based_form()
+  #$include_file = drupal_get_path('module', 'content_access') . '/content_access.admin.inc';
+  #$form_state['build_info']['files']['content_access'] = $include_file;
+  #module_load_include('inc', 'content_access', 'content_access.admin');
+
+  // Desc.
+  $ca_element =& $form['parameter']['content_access']['settings']['content_access'];
+  $ca_element = content_access_list_to_checkboxes($ca_element);
+
+  // Add submit callback to process content_access_rules_role_based_form() vals
+  // @todo I think this should go into Rules just like the default form
+  // behaviour
+  // rules_ui_edit_element_submit is the default submit callback so we add it
+  // again
+  $form['submit']['#submit'] = array('content_access_action_settings_form_submit', 'rules_ui_edit_element_submit');
+}
+
+/**
+ * Desc.
+ */
+function content_access_action_settings_form_submit($form, &$form_state) {
+  // Desc.
+  $ca_element =& $form_state['input']['parameter']['content_access']['settings']['content_access'];
+  $ca_element = content_access_checkboxes_to_list_submit($ca_element);
+
+  $form_state['rules_element']->settings['content_access'] = $ca_element;
 }
 
 /**
@@ -35,238 +175,68 @@ function _content_access_rules_check_setting($node) {
   return TRUE;
 }
 
-
 /**
- * Implementation of hook_action_info().
+ * Desc.
  */
-function content_access_rules_action_info() {
-  $items = array(
-    'content_access_action_grant_node_permissions' => array(
-      'label' => t('Grant content permissions by role'),
-      'arguments' => array(
-        'node' => array('type' => 'node', 'label' => t('Content')),
-      ),
-      'module' => 'Content access',
-    ),
-    'content_access_action_revoke_node_permissions' => array(
-      'label' => t('Revoke content permissions by role'),
-      'arguments' => array(
-        'node' => array('type' => 'node', 'label' => t('Content')),
-      ),
-      'module' => 'Content access',
-    ),
-    'content_access_action_reset_node_permissions' => array(
-      'label' => t('Reset content permissions'),
-      'arguments' => array(
-        'node' => array('type' => 'node', 'label' => t('Content')),
-      ),
-      'module' => 'Content access',
-    ),
-  );
-  if (module_exists('acl')) {
-    $items += array(
-      'content_access_action_acl_grant_access' => array(
-        'label' => t('Grant access for a user'),
-        'arguments' => array(
-          'node' => array('type' => 'node', 'label' => t('Content')),
-          'user' => array('type' => 'user', 'label' => t('User')),
-        ),
-        'module' => 'Content access',
-      ),
-      'content_access_action_acl_revoke_access' => array(
-        'label' => t('Revoke access for a user'),
-        'arguments' => array(
-          'node' => array('type' => 'node', 'label' => t('Content')),
-          'user' => array('type' => 'user', 'label' => t('User')),
-        ),
-        'module' => 'Content access',
-      ),
-    );
+function content_access_action_settings($param) {
+  $roles_ids = array_flip(user_roles());
+
+  foreach (_content_access_get_operations() as $op) {
+    $settings[$op] = array();
   }
-  return $items;
+  foreach ($param as $op_role => $role) {
+    $op = substr($op_role, 0, strpos($op_role, ':'));
+    $role_id = $roles_ids[$role];
+    $settings[$op][] = $role_id;
+  }
+
+  return $settings;
 }
 
 /**
  * Action implementation: Grant permissions for a node.
  */
-function content_access_action_grant_node_permissions($node, $settings) {
-  if (_content_access_rules_check_setting($node)) {
+function content_access_action_grant_node_permissions($params) {
+  if (_content_access_rules_check_setting($params['node'])) {
+    $settings = content_access_action_settings($params['content_access']);
     $ca_settings = array();
+
     foreach (_content_access_get_operations() as $op) {
       $settings += array($op => array());
-      $ca_settings[$op] = array_keys(array_flip(content_access_per_node_setting($op, $node)) + array_flip($settings[$op]));
+      $ca_settings[$op] = array_keys(array_flip(content_access_per_node_setting($op, $params['node'])) + array_flip($settings[$op]));
     }
-    content_access_save_per_node_settings($node, $ca_settings);
+    content_access_save_per_node_settings($params['node'], $ca_settings);
     // A following node_save() updates the grants for us.
-    return array('node' => $node);
+    return array('node' => $params['node']);
   }
-}
-
-function content_access_action_grant_node_permissions_form($settings, &$form) {
-  content_access_rules_role_based_form($settings, $form);
-}
-function content_access_action_grant_node_permissions_submit(&$settings, $form, $form_state) {
-  content_access_parse_settings($settings, $form, $form_state);
 }
 
 /**
  * Action implementation: Revoke permissions for a node.
  */
-function content_access_action_revoke_node_permissions($node, $settings) {
-  if (_content_access_rules_check_setting($node)) {
+function content_access_action_revoke_node_permissions($params) {
+  if (_content_access_rules_check_setting($params['node'])) {
+    $settings = content_access_action_settings($params['content_access']);
     $ca_settings = array();
+
     foreach (_content_access_get_operations() as $op) {
       $settings += array($op => array());
-      $ca_settings[$op] = array_diff(content_access_per_node_setting($op, $node), $settings[$op]);
+      $ca_settings[$op] = array_diff(content_access_per_node_setting($op, $params['node']), $settings[$op]);
     }
-    content_access_save_per_node_settings($node, $ca_settings);
+
+    content_access_save_per_node_settings($params['node'], $ca_settings);
     // A following node_save() updates the grants for us.
-    return array('node' => $node);
+    return array('node' => $params['node']);
   }
 }
-
-function content_access_action_revoke_node_permissions_form($settings, &$form) {
-  content_access_rules_role_based_form($settings, $form);
-}
-function content_access_action_revoke_node_permissions_submit(&$settings, $form, $form_state) {
-  content_access_parse_settings($settings, $form, $form_state);
-}
-
-
-/**
- * Action implementation: Grant access for a user.
- */
-function content_access_action_acl_grant_access($node, $user, $settings) {
-  if (_content_access_rules_check_setting($node)) {
-    module_load_include('inc', 'content_access', 'content_access.admin');
-    foreach ($settings['ops'] as $op) {
-      $acl_id = content_access_get_acl_id($node, $op);
-      acl_add_user($acl_id, $user->uid);
-      acl_node_add_acl($node->nid, $acl_id, $op == 'view', $op == 'update', $op == 'delete', content_access_get_settings('priority', $node->type));
-    }
-    // A following node_save() updates the grants for us.
-    return array('node' => $node);
-  }
-}
-
-function content_access_action_acl_grant_access_form($settings, &$form) {
-  $settings += array('ops' => array('view', 'update', 'delete'));
-  $form['settings']['ops'] = array(
-    '#type' => 'checkboxes',
-    '#options' => drupal_map_assoc(array('view', 'update', 'delete')),
-    '#title' => t('Operations to grant access for'),
-    '#default_value' => $settings['ops'],
-  );
-}
-function content_access_action_acl_grant_access_submit(&$settings, $form, $form_state) {
-  $settings['ops'] = array_filter($settings['ops']);
-}
-function content_access_action_acl_grant_access_help() {
-  return t("Note that this action is not going to revoke access for not chosen operations.");
-}
-function content_access_action_acl_grant_access_label($settings, $argument_labels) {
-  return t('Grant access for @user.', $argument_labels);
-}
-
-
-/**
- * Action implementation: Revoke access for a user.
- */
-function content_access_action_acl_revoke_access($node, $user, $settings) {
-  if (_content_access_rules_check_setting($node)) {
-    module_load_include('inc', 'content_access', 'content_access.admin');
-    foreach ($settings['ops'] as $op) {
-      $acl_id = content_access_get_acl_id($node, $op);
-      acl_remove_user($acl_id, $user->uid);
-    }
-    // A following node_save() updates the grants for us.
-    return array('node' => $node);
-  }
-}
-
-function content_access_action_acl_revoke_access_form($settings, &$form) {
-  $settings += array('ops' => array('view', 'update', 'delete'));
-  $form['settings']['ops'] = array(
-    '#type' => 'checkboxes',
-    '#options' => drupal_map_assoc(array('view', 'update', 'delete')),
-    '#title' => t('Operations to revoke access for'),
-    '#default_value' => $settings['ops'],
-  );
-}
-function content_access_action_acl_revoke_access_submit(&$settings, $form, $form_state) {
-  $settings['ops'] = array_filter($settings['ops']);
-}
-function content_access_action_acl_revoke_access_help() {
-  return t("Note that this action is only able to revoke access that has been previously granted with the help of the content access module.");
-}
-function content_access_action_acl_revoke_access_label($settings, $argument_labels) {
-  return t('Revoke access for @user.', $argument_labels);
-}
-
 
 /**
  * Action implementation: Reset permissions for a node.
  */
-function content_access_action_reset_node_permissions($node) {
-  if (_content_access_rules_check_setting($node)) {
-    content_access_delete_per_node_settings($node);
+function content_access_action_reset_node_permissions($params) {
+  if (_content_access_rules_check_setting($params['node'])) {
+    content_access_delete_per_node_settings($params['node']);
     // A following node_save() updates the grants for us.
-    return array('node' => $node);
+    return array('node' => $params['node']);
   }
-}
-
-/**
- * Implementation of hook_condition_info().
- */
-function content_access_rules_condition_info() {
-  return array(
-    'content_access_condition_check_permissions' => array(
-    'label' => t('Check role based settings'),
-    'arguments' => array(
-      'node' => array('type' => 'node', 'label' => t('Content')),
-    ),
-    'help' => t('Evaluates to TRUE, if content access allows all selected operations for the given roles.'),
-    'module' => 'Content access',
-    ),
-  );
-}
-
-/**
- * Condition implementation: Check if node has permissions.
- *
- * @note
- *   This will only check for the existence of permissions, not the
- *   absence of. I.e. a rule that checks just for authenticated write
- *   will return TRUE for a node that allows authenticated and anonymous
- *   write.
- */
-function content_access_condition_check_permissions($node, $settings) {
-  if (_content_access_rules_check_setting($node)) {
-    // Compare our settings with node's settings.
-    foreach (_content_access_get_operations() as $op) {
-      $settings += array($op => array());
-      $expect_roles = $settings[$op];
-      $current_roles = content_access_per_node_setting($op, $node);
-      if (count(array_diff($expect_roles, $current_roles)) != 0) {
-        return FALSE;
-      }
-    }
-    return TRUE;
-  }
-  return FALSE;
-}
-
-function content_access_condition_check_permissions_form($settings, &$form) {
-  content_access_rules_role_based_form($settings, $form);
-}
-function content_access_condition_check_permissions_submit(&$settings, $form, $form_state) {
-  content_access_parse_settings($settings, $form, $form_state);
-}
-
-/**
- * Automatically upgrade the old 'content_access_action_set_node_permissions' to an
- * 'content_access_action_grant_node_permissions' action.
- */
-function content_access_action_set_node_permissions_upgrade(&$element) {
-  $element['#name'] = 'content_access_action_grant_node_permissions';
 }
