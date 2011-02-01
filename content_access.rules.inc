@@ -37,6 +37,7 @@ function content_access_rules_action_info() {
           'label' => t('Role Based Access Control Settings'),
           'optional' => TRUE,
           'options list' => 'content_access_action_roles_permissions_list',
+          'restriction' => 'input',
         ),
       ),
       'group' => t('Content Access'),
@@ -79,10 +80,12 @@ function _content_access_roles_list() {
  */
 function content_access_list_to_checkboxes($element) {
   $checkboxes = array();
+  $operations = _content_access_get_operations();
+  $labels = _content_access_get_operations_lables($operations);
 
-  foreach (_content_access_get_operations() as $op) {
+  foreach ($operations as $op) {
     $checkboxes[$op] = $element;
-    $checkboxes[$op]['#title'] = t($op);
+    $checkboxes[$op]['#title'] = t($labels[$op]);
     $checkboxes[$op]['#type'] = 'checkboxes';
     $checkboxes[$op]['#options'] = $element['#options'][$op];
     unset($checkboxes[$op]['#default_value']);

@@ -435,8 +435,9 @@ function content_access_delete_per_node_settings($node) {
 
   // Delete possible acl settings
   if (module_exists('acl')) {
+    // @todo why content_access.admin.inc is not loaded?
+    module_load_include('inc', 'content_access', 'content_access.admin');
     foreach (array('view', 'update', 'delete') as $op) {
-      module_load_include('inc', 'content_access', 'content_access.admin');
       $acl_id = content_access_get_acl_id($node, $op);
       acl_delete_acl($acl_id);
     }
@@ -586,4 +587,20 @@ function content_access_form_alter(&$form, $form_state, $form_id) {
  */
 function _content_access_get_operations() {
   return array('view', 'view_own', 'update', 'update_own', 'delete', 'delete_own');
+}
+
+/**
+ * Returns labels of ops array
+ *
+ * @todo can we put it inside _content_access_get_operations()
+ */
+function _content_access_get_operations_lables($operations) {
+  $operations['view'] = 'View any content';
+  $operations['view_own'] = 'View own content';
+  $operations['update'] = 'Edit any content';
+  $operations['update_own'] = 'Edit own content';
+  $operations['delete'] = 'Delete any content';
+  $operations['delete_own'] = 'Delete own content';
+
+  return $operations;
 }
