@@ -4,7 +4,3 @@ description = Provides flexible content access control.
 core = 7.x
 package = Access control
 dependencies[] = acl
-files[] = content_access.install
-files[] = content_access.module
-files[] = content_access.admin.inc
-files[] = content_access.rules.inc
