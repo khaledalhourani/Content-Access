@@ -10,17 +10,16 @@ class ContentAccessTestCase extends DrupalWebTestCase {
 
   var $test_user;
   var $admin_user;
-  var $content_type_name;
+  var $content_type;
   var $url_content_type_name;
   var $node1;
   var $node2;
-  
+
   /**
    * Preparation work that is done before each test.
    * Test users, content types, nodes etc. are created.
    */
   function setUp($module = '') {
-    
     if (empty($module)) {
       // Enable content access module
       parent::setUp('content_access');
@@ -33,42 +32,30 @@ class ContentAccessTestCase extends DrupalWebTestCase {
         return;
       }
     }
-        
+
     // Create test user with seperate role
     $this->test_user = $this->drupalCreateUser();
-    
+
     // Create admin user
     $this->admin_user = $this->drupalCreateUser(array('access content', 'administer content types', 'grant content access', 'grant own content access', 'administer nodes', 'access administration pages'));
     $this->drupalLogin($this->admin_user);
-    
+
     // Rebuild content access permissions
-    $this->drupalPost('admin/content/node-settings/rebuild', array(), t('Rebuild permissions'));
-        
-    // This would be nice to have - but it does not work in the current simpletest version
+    node_access_rebuild();
+    #$this->drupalPost('admin/reports/status/rebuild', array(), t('Rebuild permissions'));
+
     // Create test content type
-    //$content_type = $this->drupalCreateContentType();
-    //$this->url_content_type_name = $content_type->type;
-    //$this->url_content_type_name = str_replace('_', '-', $content_type->type);
-    
-    // Create test content type (the old way)
-    $this->content_type_name = strtolower($this->randomName(5));
-    $edit = array(
-      'name' => $this->content_type_name,
-      'type' => $this->content_type_name,
-    );
-    $this->drupalPost('admin/content/types/add', $edit, t('Save content type'));
-    $this->assertRaw(t('The content type %type has been added.', array('%type' => $this->content_type_name)), 'Test content type was added successfully: '. $this->content_type_name);
-    $this->url_content_type_name = str_replace('_', '-', $this->content_type_name);
+    $this->content_type = $this->drupalCreateContentType();
   }
-  
+
   /**
    * Change access permissions for a content type
    */
   function changeAccessContentType($access_settings) {
-    $this->drupalPost('admin/content/node-type/'. $this->url_content_type_name .'/access', $access_settings, t('Submit'));
+    $this->drupalPost('admin/structure/types/manage/'. $this->content_type->type .'/access', $access_settings, t('Submit'));
     $this->assertText(t('Your changes have been saved.'), 'access rules of content type were updated successfully');
   }
-  
+
   /**
    * Change access permissions for a content type by a given keyword (view, update or delete)
    * for the role of the user
@@ -78,13 +65,13 @@ class ContentAccessTestCase extends DrupalWebTestCase {
       $user = $this->test_user;
     }
     $roles = $user->roles;
-    end($roles);
+    #end($roles);
     $access_settings = array(
       $keyword .'['. key($roles) .']' => $access,
     );
     $this->changeAccessContentType($access_settings);
   }
-  
+
   /**
    * Change the per node access setting for a content type
    */
@@ -94,26 +81,25 @@ class ContentAccessTestCase extends DrupalWebTestCase {
     );
     $this->changeAccessContentType($access_permissions);
   }
-  
+
   /**
    * Change access permissions for a node by a given keyword (view, update or delete)
    */
   function changeAccessNodeKeyword($node, $keyword, $access = TRUE) {
     $user = $this->test_user;
     $roles = $user->roles;
-    end($roles);
+    #end($roles);
     $access_settings = array(
       $keyword .'['. key($roles) .']' => $access,
     );
     $this->changeAccessNode($node, $access_settings);
   }
-  
-    /**
+
+  /**
    * Change access permission for a node
    */
   function changeAccessNode($node, $access_settings) {
     $this->drupalPost('node/'. $node->nid .'/access', $access_settings, t('Submit'));
     $this->assertText(t('Your changes have been saved.'), 'access rules of node were updated successfully');
   }
-
 }
