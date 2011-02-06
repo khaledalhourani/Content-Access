@@ -3,4 +3,6 @@ name = Content Access
 description = Provides flexible content access control.
 core = 7.x
 package = Access control
-dependencies[] = acl
+files[] = content_access.rules.inc
+files[] = tests/content_access.test
+files[] = tests/content_access_acl.test
