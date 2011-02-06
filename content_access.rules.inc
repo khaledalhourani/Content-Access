@@ -171,6 +171,7 @@ function content_access_action_settings_form_submit($form, &$form_state) {
  * Verifies that per content settings are activated for the given node.
  */
 function _content_access_rules_check_setting($node) {
+  // @todo node_get_types is D6 only
   if (!content_access_get_settings('per_node', $node->type)) {
     rules_log(t("Can't set per content permissions for content type @type. Make sure to have per content settings activated for content types you want to alter access control for.", array('@type' => node_get_types('name', $node->type))), TRUE);
     return FALSE;
